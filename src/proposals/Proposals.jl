@@ -118,7 +118,7 @@ function (prop::RWalk)(
         # get proposed point
         while true
             # check scale factor to avoid over-shrinking
-            prop.scale < 1e-5 * scale_init && error("Random walk sampling appears to be stuck.")
+            prop.scale < 1e-15 * scale_init && error("Random walk sampling appears to be stuck.")
             # transform to proposal distribution
             du = randoffset(rng, bounds)
             u_prop = @. point + prop.scale * du
@@ -214,7 +214,7 @@ function (prop::RStagger)(
         # get proposed point
         while true
             # check scale factor to avoid over-shrinking
-            prop.scale < 1e-5 * scale_init && error("Random walk sampling appears to be stuck.")
+            prop.scale < 1e-15 * scale_init && error("Random walk sampling appears to be stuck.")
             # transform to proposal distribution
             du = randoffset(rng, bounds)
             u_prop = @. point + prop.scale * stagger * du
@@ -434,7 +434,7 @@ function sample_slice(rng, axis, u, logl_star, model, nc, nexpand, ncontract)
         window = norm(u_hat)
 
         # check if the slice has shrunk to be ridiculously small
-        window < 1e-5 * window_init && error("Slice sampling appears to be stuck.")
+        window < 1e-15 * window_init && error("Slice sampling appears to be stuck.")
 
         # propose a new position
         r = rand(rng)

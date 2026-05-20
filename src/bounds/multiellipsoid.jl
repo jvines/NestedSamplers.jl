@@ -40,15 +40,20 @@ end
 
 function fit(::Type{<:MultiEllipsoid}, x::AbstractMatrix; pointvol = 0)
     parent = fit(Ellipsoid, x, pointvol = pointvol)
-    ells = fit(MultiEllipsoid, x, parent, pointvol = pointvol)
+    ells = fit(MultiEllipsoid, x, parent, pointvol = pointvol, depth = 0)
     return MultiEllipsoid(ells)
 end
 
-function fit(::Type{<:MultiEllipsoid}, x::AbstractMatrix, parent::Ellipsoid; pointvol = 0)
+const _MAX_SPLIT_DEPTH = 32
+
+function fit(::Type{<:MultiEllipsoid}, x::AbstractMatrix, parent::Ellipsoid; pointvol = 0, depth = 0)
     ndim, npoints = size(x)
 
     # Clustering will fail with fewer than k=2 points
     npoints ≤ 2 && return [parent]
+
+    # Cap recursion depth to prevent stack overflow in high dimensions
+    depth ≥ _MAX_SPLIT_DEPTH && return [parent]
 
     p1, p2 = endpoints(parent)
     starting_points = hcat(p1, p2)
@@ -67,15 +72,15 @@ function fit(::Type{<:MultiEllipsoid}, x::AbstractMatrix, parent::Ellipsoid; poi
 
     # If total volume decreased by over half, recurse
     if volume(ell1) + volume(ell2) < 0.5volume(parent)
-        return vcat(fit(MultiEllipsoid, x1, ell1, pointvol = pointvol),
-                    fit(MultiEllipsoid, x2, ell2, pointvol = pointvol))
+        return vcat(fit(MultiEllipsoid, x1, ell1, pointvol = pointvol, depth = depth + 1),
+                    fit(MultiEllipsoid, x2, ell2, pointvol = pointvol, depth = depth + 1))
     end
 
     # Otherwise see if total volume is much larger than expected
     # and split into more than 2 clusters
     if volume(parent) > 2npoints * pointvol
-        out = vcat(fit(MultiEllipsoid, x1, ell1, pointvol = pointvol),
-                    fit(MultiEllipsoid, x2, ell2, pointvol = pointvol))
+        out = vcat(fit(MultiEllipsoid, x1, ell1, pointvol = pointvol, depth = depth + 1),
+                    fit(MultiEllipsoid, x2, ell2, pointvol = pointvol, depth = depth + 1))
         sum(volume, out) < 0.5volume(parent) && return out
     end
 
@@ -120,7 +125,7 @@ function rand_live(rng::AbstractRNG, me::MultiEllipsoid, us)
 
     # find which Ellipsoid/s it overlaps with
     idxs = findall(ell -> u ∈ ell, me.ellipsoids)
-    # TODO if point isn't bounded, update bounds
+    # If point isn't bounded, caller (step.jl) refits bounds
     if isempty(idxs)
         return u, nothing
     end
