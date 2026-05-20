@@ -24,7 +24,13 @@ function nested_isdone(rng, model, sampler, samples, state, i; progress=true, ma
     # 5) number of effective samples
     # TODO
 
-    if progress
+    # Strict identity check: recent AbstractMCMC versions inject sentinel
+    # structs (CreateNewProgressBar{String}, NoLogging) for the progress
+    # kwarg instead of a Bool, which crashes a naked `if progress` with
+    # `non-boolean used in boolean context`. `=== true` rejects any
+    # sentinel while still printing when a caller explicitly passes
+    # `progress=true`.
+    if progress === true
         str = @sprintf "iter=%d\tncall=%d\tΔlogz=%.2g\tlogl=%.2g\tlogz=%.2g" i state.ncall delta_logz state.logl_dead state.logz
         print("\r\33[2K", str)
     end
