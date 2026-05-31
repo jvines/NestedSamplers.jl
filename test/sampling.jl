@@ -32,6 +32,28 @@ end
     @test all(>(0), chains[:x][chains[:weights] .> 1e-10])
 end
 
+@testset "logzerr stability with -Inf regions" begin
+    # Regression: a likelihood with a forbidden (-Inf) region makes init_particles
+    # clamp those live points to the -1e300 sentinel. The old information/logzerr
+    # recursion carried the running logz as a standalone additive term, so a -1e300
+    # sentinel dead point inflated h to ~1e300 and logzerr to ~1e141. The stable
+    # recursion (logz only inside differences) must keep logzerr finite and sane.
+    logl(x::AbstractVector) = x[1] < 0.6 ? -0.5 * sum(((xi - 0.3) / 0.1)^2 for xi in x) : -Inf
+    priors = [Uniform(0.0, 1.0) for _ in 1:3]   # ~40% of init points are sentinels
+    model = NestedModel(logl, priors)
+    spl = Nested(3, 500; bounds=Bounds.MultiEllipsoid, proposal=Proposals.RWalk())
+
+    _, state = sample(rng, model, spl; dlogz=0.1)
+    @test isfinite(state.logz)
+    @test isfinite(state.logzerr)
+    @test 0 < state.logzerr < 10        # was ~1e141 before the fix
+    @test isfinite(state.h) && state.h ≥ 0
+
+    # parallel batch path shares the recursion — must also stay finite
+    _, pstate = sample_parallel(rng, model, spl; batch_size=4, parallel=false, dlogz=0.1)
+    @test isfinite(pstate.logzerr) && 0 < pstate.logzerr < 10
+end
+
 @testset "Stopping criterion" begin
     logl(x::AbstractVector) =  exp(-x[1]^2 / 2) / √(2π)
     priors = [Uniform(-1, 1)]

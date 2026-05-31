@@ -1,4 +1,10 @@
 
+# Guarded x·log(x): IEEE gives 0*log(0)=0*(-Inf)=NaN, but the information update
+# needs the limit xlogx(0)=0 (a zero-weight / -Inf-loglikelihood point carries no
+# information). Used by the numerically-stable evidence/information recursion below
+# (and mirrored in parallel.jl step_batch).
+@inline xlogx(x) = iszero(x) ? zero(x) : x * log(x)
+
 function step(rng, model, sampler::Nested; kwargs...)
     # Initialize particles
     # us are in unit space, vs are in prior space
@@ -26,9 +32,11 @@ function step(rng, model, sampler::Nested; kwargs...)
     ncall = since_update = nc
 
     # update evidence and information
+    # Stable bootstrap: Z_old = 0 ⇒ a = 0, b = 1, lbar = logl_dead, so h = logl_dead - logz.
+    # (logz enters only as a difference, so a -1e300 sentinel dead point gives h ≈ 0, not ~1e300.)
     logz = logwt
-    h = exp(logl_dead - logz + logdvol) * logl_dead - logz
-    logzerr = sqrt(h * sampler.dlv)
+    h = logl_dead - logz
+    logzerr = sqrt(max(zero(h), h * sampler.dlv))
 
     sample = (u = u_dead, v = v_dead, logwt = logwt, logl = logl_dead)
     state = (it = 1, ncall = ncall, us = us, vs = vs, logl = logl,
@@ -100,10 +108,16 @@ function step(rng, model, sampler, state; kwargs...)
     logwt = logaddexp(state.logl_dead, logl_dead) + logdvol
 
     # update evidence and information
+    # Stable information update: reorganized so the running logz appears ONLY inside
+    # differences before being scaled (shift-invariant in floating point; a -1e300
+    # sentinel dead point contributes ~0 to h instead of inflating it to ~1e300).
+    #   a = Z_old/Z_new ∈ [0,1],  b = 1-a = exp(logwt-logz),  lbar = trapezoid-avg dead logL.
     logz = logaddexp(state.logz, logwt)
-    logzterm = exp(state.logl_dead - logz + logdvol) * state.logl_dead +
-               exp(logl_dead - logz + logdvol) * logl_dead
-    h = logzterm + exp(state.logz - logz) * (state.h + state.logz) - logz
+    a = exp(state.logz - logz)
+    b = -expm1(state.logz - logz)
+    lbar = exp(state.logl_dead - logwt + logdvol) * state.logl_dead +
+           exp(logl_dead - logwt + logdvol) * logl_dead
+    h = a * state.h + xlogx(a) + b * (lbar - logz)
     logzerr = sqrt(max(zero(h), state.logzerr^2 + (h - state.h) * sampler.dlv))
 
     ## prepare returns
@@ -233,11 +247,13 @@ function add_live_points(samples, model, sampler, state)
         logdvol = logvol + log(exp(dlv) - 1) - log(2)
         logwt = logaddexp(prev_logl_dead, logl_dead) + logdvol
 
-        # update evidence and information
+        # update evidence and information (stable form; see step-with-state above)
         logz = logaddexp(prev_logz, logwt)
-        logzterm = exp(prev_logl_dead - logz + logdvol) * prev_logl_dead +
-                   exp(logl_dead - logz + logdvol) * logl_dead
-        h = logzterm + exp(prev_logz - logz) * (prev_h + prev_logz) - logz
+        a = exp(prev_logz - logz)
+        b = -expm1(prev_logz - logz)
+        lbar = exp(prev_logl_dead - logwt + logdvol) * prev_logl_dead +
+               exp(logl_dead - logwt + logdvol) * logl_dead
+        h = a * prev_h + xlogx(a) + b * (lbar - logz)
         logzerr = sqrt(max(zero(h), prev_logzerr^2 + (h - prev_h) * dlv))
 
         prev_logvol = logvol

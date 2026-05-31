@@ -130,9 +130,13 @@ function step_batch(rng, rngs, props, model, sampler::Nested, state, K::Int, par
         logdvol  = logvol - log(N) - log(2)
         logwt    = logaddexp(prev_ld, ldead) + logdvol
         logz_new = logaddexp(logz, logwt)
-        logzterm = exp(prev_ld - logz_new + logdvol) * prev_ld +
-                   exp(ldead   - logz_new + logdvol) * ldead
-        h_new    = logzterm + exp(logz - logz_new) * (h + logz) - logz_new
+        # Stable information update (mirrors step.jl): logz only inside differences,
+        # so a -1e300 sentinel dead point contributes ~0 to h instead of ~1e300.
+        a        = exp(logz - logz_new)
+        b        = -expm1(logz - logz_new)
+        lbar     = exp(prev_ld - logwt + logdvol) * prev_ld +
+                   exp(ldead   - logwt + logdvol) * ldead
+        h_new    = a * h + xlogx(a) + b * (lbar - logz_new)
         logzerr  = sqrt(max(zero(h_new), logzerr^2 + (h_new - h) * sampler.dlv))
 
         batch[j] = (u = u_dead, v = v_dead, logwt = logwt, logl = ldead)
