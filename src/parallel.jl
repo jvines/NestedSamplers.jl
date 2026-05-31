@@ -50,6 +50,11 @@ function sample_parallel(rng::AbstractRNG, model::AbstractModel, sampler::Nested
     # Per-thread RNGs for race-free, reproducible parallel walks.
     nthr = max(Threads.nthreads(), K)
     rngs = [Random.MersenneTwister(rand(rng, UInt64)) for _ in 1:nthr]
+    # Per-thread proposal COPIES: proposals like RWalk are mutable structs
+    # whose `scale` field is adapted in place (update_scale!). Sharing one
+    # object across the K concurrent walks races on `scale` and biases the
+    # sampling/evidence. A private copy per thread adapts independently.
+    props = [deepcopy(sampler.proposal) for _ in 1:nthr]
 
     while true
         logz_remain = maximum(state.logl) + state.logvol
@@ -57,7 +62,7 @@ function sample_parallel(rng::AbstractRNG, model::AbstractModel, sampler::Nested
         (state.it ≥ maxiter || state.ncall ≥ maxcall ||
          delta_logz ≤ dlogz || state.logl_dead ≥ maxlogl) && break
 
-        batch, state = step_batch(rng, rngs, model, sampler, state, K, parallel)
+        batch, state = step_batch(rng, rngs, props, model, sampler, state, K, parallel)
         append!(samples, batch)
         progress && @printf("\r\33[2Kit=%d ncall=%d Δlogz=%.3g logz=%.4g",
                             state.it, state.ncall, delta_logz, state.logz)
@@ -75,7 +80,7 @@ sample_parallel(model::AbstractModel, sampler::Nested; kwargs...) =
 # One batch iteration: remove the K lowest-L points, draw K replacements above
 # L_(K) (parallel), and fold the K dead points into the evidence with the exact
 # `step` bookkeeping applied K times. K=1 ⇒ identical to the recursive `step`.
-function step_batch(rng, rngs, model, sampler::Nested, state, K::Int, parallel::Bool)
+function step_batch(rng, rngs, props, model, sampler::Nested, state, K::Int, parallel::Bool)
     N = sampler.nactive
     pointvol = exp(state.logvol) / N
 
@@ -101,12 +106,13 @@ function step_batch(rng, rngs, model, sampler::Nested, state, K::Int, parallel::
     reps = Vector{Tuple{Vector{Float64},Any,Float64,Int}}(undef, K)
     if parallel && K > 1
         Threads.@threads :static for j in 1:K
-            reps[j] = _draw_replacement(rngs[Threads.threadid()], sampler, model,
+            tid = Threads.threadid()
+            reps[j] = _draw_replacement(rngs[tid], props[tid], sampler, model,
                                          active_bound, has_bounds, Lstar, state.us, pointvol)
         end
     else
         for j in 1:K
-            reps[j] = _draw_replacement(rng, sampler, model,
+            reps[j] = _draw_replacement(rng, props[1], sampler, model,
                                          active_bound, has_bounds, Lstar, state.us, pointvol)
         end
     end
@@ -147,7 +153,7 @@ end
 
 # Draw one new point with L > Lstar via the sampler's proposal (bounded path
 # mirrors step.jl, including the live-point/ellipsoid fallbacks).
-function _draw_replacement(rng, sampler, model, active_bound, has_bounds, Lstar, us, pointvol)
+function _draw_replacement(rng, proposal, sampler, model, active_bound, has_bounds, Lstar, us, pointvol)
     if has_bounds
         point, bound = rand_live(rng, active_bound, us)
         if isnothing(bound)
@@ -158,7 +164,7 @@ function _draw_replacement(rng, sampler, model, active_bound, has_bounds, Lstar,
             bound = Bounds.scale!(Bounds.fit(Bounds.Ellipsoid, us; pointvol=pointvol), sampler.enlarge)
             point = rand_live(rng, bound, us)[1]
         end
-        u, v, logl, nc = sampler.proposal(rng, point, Lstar, bound, model)
+        u, v, logl, nc = proposal(rng, point, Lstar, bound, model)
     else
         point = rand(rng, eltype(us), sampler.ndims)
         bound = Bounds.fit(Bounds.NoBounds, us)
