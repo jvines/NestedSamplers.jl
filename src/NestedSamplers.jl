@@ -23,7 +23,8 @@ export Bounds,
        Proposals,
        Models,
        NestedModel,
-       Nested
+       Nested,
+       sample_parallel
 
 include("model.jl")         # The default model for nested sampling
 
@@ -36,6 +37,7 @@ using .Proposals
 include("staticsampler.jl") # The static nested sampler
 include("step.jl")          # The stepping mechanics (extends AbstractMCMC)
 include("sample.jl")        # Custom sampling (extends AbstractMCMC)
+include("parallel.jl")      # Batch / parallel nested sampling (K-point)
 
 include("models/Models.jl")
 using .Models

@@ -18,4 +18,5 @@ include("utils.jl")
 @testset "Proposals" begin include("proposals/proposals.jl") end
 @testset "Sampler" begin include("sampler.jl") end
 @testset "Sampling" begin include("sampling.jl") end
+@testset "Parallel" begin include("parallel.jl") end
 @testset "Models" begin include("models.jl") end
